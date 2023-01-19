@@ -1,0 +1,503 @@
+---
+title: "Group 12 Final Project"
+author: "Abrie Le Roux, Ali Raza, Jordan Keelan"
+date: "`r Sys.Date()`"
+output:
+  html_document:
+    df_print: paged
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+```{r}
+library(mosaic)
+library(tidyverse)
+library(dplyr)
+library(ggplot2)
+library(lubridate)
+library(zoo)
+```
+
+```{r}
+shelter1.df = read.csv("https://open.alberta.ca/dataset/47f82be8-af8d-4994-8a97-2252d7643ff5/resource/b7080b66-25ea-4c30-ac47-02b64353637f/download/2013-2022-emergency-shelter-occupancy-machine-readable.csv")
+```
+
+# Master Dataset
+
+```{r}
+data = (shelter1.df %>% select(-City, -ShelterName, -Organization, -Shelter, -Capacity, -Daytime)) %>% na.omit() # remove unneeded columns
+list(unique(data["ShelterType"]))
+data["Date"] <- as.Date(as.character(as.POSIXct(data$Date, format="%m/%d/%Y"))) # convert date column to date type
+data = filter(data, ShelterType =='Adult Emergency'|ShelterType =='COVID19 Expanded Shelter'|ShelterType =='COVID19 social Distancing Measures'|ShelterType =='Daytime Shelter'|ShelterType =='Family Emergency'|ShelterType =='Intox'|ShelterType =='Long Term Supportive'|ShelterType =='Short Term Supportive'|ShelterType =='Winter Emergency'|ShelterType =='Women Emergency'|ShelterType =='Youth Emergency')
+data
+```
+
+# Simplify by aggregating on daily total occupancy
+
+```{r}
+daily.df <-(aggregate(data$Overnight, by=list(Date = data$Date),  FUN=sum)) # Sums total daily occupancy across all shelters
+colnames(daily.df)[2] ="SumOvernight" # Renames new daily sum column
+```
+
+# Daily sum total occupancy in all types of emergency shelters
+
+```{r}
+ggplot(daily.df, aes(x=Date, y=SumOvernight)) +
+  geom_line() + 
+  ggtitle("Daily Sum Total Occupancy of all Reporting Emergency Shelters")
+```
+
+# Sum occupancy on quarter to be used in linear regression
+
+```{r}
+data2 <- data # new data frame
+data2$quarter <- as.yearqtr(data2$Date)  # Appends column that identifies quarter of entry
+head(data2)
+
+quartely.df <-(aggregate(data2$Overnight, by=list(Quarter = data2$quarter),  FUN=sum)) # Sums total occupancy on quarter
+colnames(quartely.df)[2] <- "SumOvernightQuarterly" # renames new summed column
+quartely.df$index <-  seq.int(nrow(quartely.df)) # indexes data set
+quartely.df <- filter(quartely.df, index > 3) # Removes quarters prior to 2014 Q1
+quartely.df$index <-  seq.int(nrow(quartely.df)) # re-indexes data set
+regression.df <- filter(quartely.df, index < 35) # Removed all quarters beyond 2019 Q4
+regression.df # THIS IS OUR DATASET TO DO REGRESSION ON
+```
+
+### Ali Regression Code starts here
+
+*Below is the Linear Regression Model we are trying to prove*
+
+$$
+{R}_{SumOvernightQuarterly,i} = \beta_{0} + \beta_1*R_{Quarter,i} + e_{i}\hspace{0.5in} 
+$$
+
+```{r}
+ggplot(regression.df, aes(x = index, y = SumOvernightQuarterly)) + geom_point(col="blue", size = 2) + xlab("Quarterly 2014-2019") + ylab("Overnight Stay") + ggtitle("Overnight Stays In Emergency through 2014-2019") + geom_smooth(method="lm", col="red")
+```
+
+*computing correlation coefficient*
+
+```{r}
+cor(~SumOvernightQuarterly, ~index, data=regression.df)
+```
+
+$$
+r=-0.88323466989
+$$
+
+Strong negative correlation..
+
+*Estimating the Model*
+
+```{r}
+predictovernight = lm(SumOvernightQuarterly ~ index, data=regression.df) 
+predictovernight$coef
+```
+
+$$
+\hat{R}_{SumOvernightQuarterly,i} = 2033.522347841533474 -0.000059670087769 *\hat R_{Quarter,i} \hspace{0.5in} \text{(Note: There is no}\:\: e_{i} \:\:\text{term on the estimate of the model)}
+$$ #interpret the equation
+
+**Interpretation of b, estimate of B1:**
+
+As quarter decreases by 1 unit, then the for the occupancy rate will decrease by an *average* of
+-0.000059670087769.
+
+**Interpretation of b, estimate of B0:** When the rate of the return of the market is 0 the rate of
+the overnight occupancy of shelters quarters stock is on average 2033.522347841533474.
+
+```{r}
+summary(predictovernight)
+```
+
+Squared is 0.77010819 which tells us that approx 77% of the variability observed can be explained by
+the regression model.
+
+*Below I am checking is the linearity of the model is valid* #Should this be less than 0 since we
+are seeing a negative slope 
+$$
+{\rm H}_{0}: \beta_1 = (\leq) 0 \hspace{0.5in} {\rm H}_{A}: \beta_1 < 0
+$$
+
+*computing our p value*
+
+```{r}
+coef(summary(predictovernight))
+```
+
+```{r}
+pt(-8.8344246814, 22)
+```
+
+P value is less than 0.05 we reject null, therefore we can agree with our h alternative
+
+*Compute a 95% confidence interval for beta 1*
+
+```{r}
+qt(p = 0.025,df =57,lower.tail = FALSE )
+```
+
+```{r}
+-3268.4026087 - 369.9621341*(2.0024654593)
+-3268.4026087 + 369.9621341*(2.0024654593)
+```
+
+$$
+{\rm -4009.2390035}<= B_{1}\ <=-2527.5662139
+$$
+
+*normality of the residuals condition*
+
+```{r}
+predicted.values.overnight = predictovernight$fitted.values #place the predicted values of y for each observed x into a vector
+eison = predictovernight$residuals      #pull out the residuals
+diagnosticdf2 = data.frame(predicted.values.overnight, eison) #create a data frame of fitted.values and residuals
+```
+
+```{r}
+diagnosticdf2
+```
+
+```{r}
+ggplot(diagnosticdf2, aes(sample = eison )) +  stat_qq(col='blue') + stat_qqline(col='red') + ggtitle("Normal Probability Plot of Residuals")
+```
+
+residuals are normal
+
+*To inspect the homoscedasticity condition*
+
+```{r}
+ggplot(diagnosticdf2, aes(x = predicted.values.overnight, y = eison)) +  geom_point(size=2, col='blue', position="jitter") + xlab("Ovenight stays quarterly sum") + ylab("Residuals") + ggtitle("Plot of Fits to Residuals") + geom_hline(yintercept=0, color="red", linetype="dashed")
+```
+
+```{r}
+sum(diagnosticdf2$eison)
+```
+
+really small 0 so we can say it is a good model when talking about the normality of residuals.
+
+*Below we will predict the number of overnight stays in emergency shelters* *2020 q1 by using the
+predict function with index =25*
+
+```{r}
+predict(predictovernight, data.frame(index=31))
+```
+
+```{r}
+predict(predictovernight, newdata=data.frame(index = 25), interval="conf") #compute the 95% CI for mean Y when x = 25
+```
+
+95% confidence for the number of overnight stays in emergency shelters in the first quarter of 2020
+will be between...
+
+*Below I am computing the r.boot,a.boot,b.boot,ymean.boot*
+
+```{r}
+Nbootstraps = 1000 #resample n =  200, 1000 times
+cor.boot = numeric(Nbootstraps) #define a vector to be filled by the cor boot stat
+a.boot = numeric(Nbootstraps) #define a vector to be filled by the a boot stat
+b.boot = numeric(Nbootstraps) #define a vector to be filled by the b boot stat
+ymean.boot = numeric(Nbootstraps) #define a vector to be filled by the predicted y boot stat
+```
+
+```{r}
+nsize = dim(regression.df)[1]  #set the n to be equal to the number of bivariate cases, number of rows
+xvalue = 25 #set x = 15% for first quarter of 2020 in a certain county
+#start of the for loop
+for(i in 1:Nbootstraps)
+{   #start of the loop
+    index = sample(nsize, replace=TRUE)  #randomly picks a number between 1 and n, assigns as index
+    demovote.boot = regression.df[index, ] #accesses the i-th row of the regression.df data frame
+    #
+    cor.boot[i] = cor(~SumOvernightQuarterly, ~index , data=demovote.boot) #computes correlation for each bootstrap sample
+    votedemocrat.lm = lm(SumOvernightQuarterly ~ index, data=demovote.boot)  #set up the linear model
+    a.boot[i] = coef(votedemocrat.lm)[1] #access the computed value of a, in position 1
+    b.boot[i] = coef(votedemocrat.lm)[2] #access the computed value of b, in position 2
+    ymean.boot[i] = a.boot[i] + (b.boot[i]*xvalue)
+}
+#end the loop
+#create a data frame that holds the results of teach of he Nbootstraps 
+    bootstrapresultsdf = data.frame(cor.boot, a.boot, b.boot, ymean.boot)
+```
+
+```{r}
+bootstrapresultsdf
+```
+
+```{r}
+ggplot(bootstrapresultsdf, aes(x = cor.boot)) + geom_histogram(col="red", fill="blue", binwidth=0.01) + xlab("Values of the Bootstrap Statistic: Correlation Coefficient") + ylab("Count") + ggtitle("Distribution of Bootstrap Statistics: r")
+```
+
+```{r}
+qdata(~cor.boot, c(0.025, 0.975), data=bootstrapresultsdf)
+```
+
+$$
+{ -0.94398577475  }<= r_{boot} <=-0.82093112577 
+$$
+
+```{r}
+ggplot(bootstrapresultsdf, aes(x = a.boot)) + geom_histogram(col="red", fill="blue") + xlab("Values of the Bootstrap Statistic: y-Intercept Estimate") + ylab("Count") + ggtitle("Distribution of Bootstrap Statistics: a")
+```
+
+```{r}
+qdata(~a.boot, c(0.025, 0.975), data=bootstrapresultsdf)
+```
+
+$$
+{ 306333.75162  }<= a_{boot} <=330773.08508
+$$
+
+```{r}
+ggplot(bootstrapresultsdf, aes(x = b.boot)) + geom_histogram(col="red", fill="blue") + xlab("Values of the Bootstrap Statistic: Slope Estimate") + ylab("Count") + ggtitle("Distribution of Bootstrap Statistics: b")
+```
+
+```{r}
+qdata(~b.boot, c(0.025, 0.975), data=bootstrapresultsdf)
+```
+
+$$
+{ -4062.4420309 }<= b_{boot} <=-2466.1849029
+$$
+
+```{r}
+ggplot(bootstrapresultsdf, aes(x = ymean.boot)) + geom_histogram(col="red", fill="blue") + xlab("Values of the Bootstrap Statistic: Mean of Y Given index = 25") + ylab("Count") + ggtitle("Distribution of Bootstrap Statistics: Mean of Y for index = 25")
+```
+
+```{r}
+qdata(~ymean.boot, c(0.025, 0.975), data=bootstrapresultsdf)
+```
+
+$$
+{ 226560.25442 }<= \mu_{y|x=25} <=247034.23877 
+$$
+
+# Set Data set up for women Shelters
+
+```{r}
+data3 <- data
+
+data3$Date <- floor_date(data3$Date, "month")
+
+# Sum total occupants of womens shelters by month
+womenData <- filter(data3, ShelterType=="Women Emergency")
+data3.women <- aggregate(womenData$Overnight, by=list(Date=womenData$Date), FUN="sum")
+colnames(data3.women)[2] <- "womenMonthOvernightSum"
+data3.women
+
+# Sum total occupants of all shelters by month
+data3.all <- aggregate(data3$Overnight, by=list(Date=data3$Date), FUN="sum")
+colnames(data3.all)[2] <- "totalMonthOvernightSum"
+data3.all
+
+# Combine Data Frames 
+data3.temp <- inner_join(data3.women,data3.all, by = "Date")
+data3.temp$PropWomen <- data3.temp$womenMonthOvernightSum / data3.temp$totalMonthOvernightSum
+
+# Remove Dates, splits data frame into one for each downturn
+data3.downturn <- filter(filter(data3.temp, Date > "2014-09-01"), Date < "2016-10-01") #2014
+data3.covid <- filter(filter(data3.temp, Date > "2020-03-01"), Date < "2022-04-01") #2020
+
+# add indicator to each downturn
+data3.downturn$Downturn = "2014-16"
+data3.covid$Downturn = "2020-22"
+
+# recombine
+monthlywomen.df <- rbind(data3.downturn,data3.covid)
+monthlywomen.df
+
+#keep dates for prop chart
+
+```
+
+```{r}
+favstats(~ PropWomen | Downturn, data=monthlywomen.df)  
+```
+
+```{r}
+0.03666908-0.03329420	
+```
+
+```{r}
+ggplot(data=monthlywomen.df, aes(x = Downturn, y = PropWomen)) + geom_violin(fill="blue") + geom_boxplot(width = 0.05, fill="orange") + xlab("Downturn") + ylab("Women Shelter to Total Shelter Occupant Proportion") + ggtitle("Monthly Overnight Shelter Occupancy (Women Proportion) in Alberta: 24 Month") + coord_flip()
+```
+
+```{r}
+ggplot(data3.temp, aes(x=Date, y=PropWomen)) +
+  geom_line() + 
+  ggtitle("Monthly Proportion of Women Shelter Occupants to Total")
+```
+
+```{r}
+n.2014 = favstats(~totalMonthOvernightSum|Downturn, data=monthlywomen.df)$n[1]
+n.2020 = favstats(~totalMonthOvernightSum|Downturn, data=monthlywomen.df)$n[2]
+NsimsW = 100000
+prop.2014 = numeric(NsimsW)
+prop.2020 = numeric(NsimsW)
+diff.props = numeric(NsimsW)
+
+data.2014w = filter(monthlywomen.df, Downturn=="2014-16")
+data.2020w = filter(monthlywomen.df, Downturn=="2020-22") 
+```
+
+```{r}
+for(i in 1:NsimsW)
+  {   prop.2014[i] = mean(sample(data.2014w$PropWomen, n.2014, replace=TRUE))
+      prop.2020[i] = mean(sample(data.2020w$PropWomen, n.2020, replace=TRUE))
+      diff.props[i] = prop.2020[i] - prop.2014[i]
+}
+
+boot.women = data.frame(prop.2020, prop.2014, diff.props)
+head(boot.women,100)
+```
+
+```{r}
+ggplot(data=boot.women, aes(x = diff.props)) + geom_histogram(fill='blue', col='red', binwidth=.0005) + xlab("P_{womenShelter2020} - P_{womenShelter2014}") + ggtitle("Bootstrap Distribution of P_{woman2020} - P_{women2014}: 24 Month")
+```
+
+```{r}
+qdata(~ diff.props, c(0.025, 0.975), data=boot.women)
+```
+$$
+95\% CI: -0.00452 < p_{womanShelter2020}-p_{womanShelter2014}<0.0055
+$$
+
+## Ali Permutation test code starts here on the prop of women proportion difference
+
+```{r}
+favstats(~ totalMonthOvernightSum | Downturn, data=monthlywomen.df) 
+favstats(~ totalMonthOvernightSum | Downturn, data=monthlywomen.df)[1,]$mean - favstats(~ totalMonthOvernightSum | Downturn, data=monthlywomen.df)[2,]$mean
+```
+
+```{r}
+favstats(~ PropWomen | Downturn, data=monthlywomen.df)
+favstats(~ PropWomen | Downturn, data=monthlywomen.df)[1,]$mean - favstats(~ PropWomen | Downturn, data=monthlywomen.df)[2,]$mean
+```
+
+```{r}
+obMeanDiff = favstats(~ PropWomen | Downturn, data=monthlywomen.df)[2,]$mean - 
+  favstats(~ PropWomen | Downturn, data=monthlywomen.df)[1,]$mean #computes current difference of sample means 
+obMeanDiff
+N = 100000 #2000 different permutations minus the difference we have observed
+womenprop.2014=numeric(N)
+womenprop.2020=numeric(N)
+outcomeW = numeric(N) #create a vector to store differences of means
+for(i in 1:N)
+{ indexW = sample(48, 24, replace=FALSE) 
+   womenprop.2014[i] = mean(monthlywomen.df$PropWomen[indexW])
+   womenprop.2020[i] = mean(monthlywomen.df$PropWomen[-indexW])
+   outcomeW[i] = womenprop.2020[i] - womenprop.2014[i] #difference between means
+}
+
+diffWomen.df.12=data.frame(womenprop.2020,womenprop.2014,outcomeW)
+diffWomen.df.12
+```
+
+```{r}
+hist(outcomeW, xlab="Diff of Mean Prop 2020-2014", ylab="Frequency", main="Permutation Distribution: 24 Month", col='blue', breaks=50)
+abline(v = obMeanDiff, col="red")
+```
+
+```{r}
+p.value = prop(outcomeW >= obMeanDiff)
+p.value
+```
+
+# 12 month test
+
+```{r}
+# Remove Dates, splits data frame into one for each downturn
+data4.downturn <- filter(filter(data3.temp, Date > "2014-09-01"), Date < "2015-10-01") #2014
+data4.covid <- filter(filter(data3.temp, Date > "2020-03-01"), Date < "2021-04-01") #2020
+
+# add indicator to each downturn
+data4.downturn$Downturn = "2014-2015"
+data4.covid$Downturn = "2020-2021"
+
+# recombine
+monthly12women.df <- rbind(data4.downturn,data4.covid)
+monthly12women.df
+```
+
+```{r}
+favstats(~ PropWomen | Downturn, data=monthly12women.df)  
+```
+
+```{r}
+ggplot(data=monthly12women.df, aes(x = Downturn, y = PropWomen)) + geom_violin(fill="blue") + geom_boxplot(width = 0.05, fill="orange") + xlab("Downturn") + ylab("Women Shelter to Total Proportion") + ggtitle("Monthly Overnight Shelter Occupancy (Women Proportion) in Alberta: 12 month") + coord_flip()
+
+```
+
+```{r}
+n.2014.12 = favstats(~totalMonthOvernightSum|Downturn, data=monthly12women.df)$n[1]
+n.2020.12 = favstats(~totalMonthOvernightSum|Downturn, data=monthly12women.df)$n[2]
+NsimsW = 100000
+prop.12.2014 = numeric(NsimsW)
+prop.12.2020 = numeric(NsimsW)
+diff.props.12 = numeric(NsimsW)
+
+data.2014.12 = filter(monthly12women.df, Downturn=="2014-2015")
+data.2020.12 = filter(monthly12women.df, Downturn=="2020-2021") 
+
+```
+
+```{r}
+for(i in 1:NsimsW)
+  {   prop.12.2014[i] = mean(sample(data.2014.12$PropWomen, n.2014.12, replace=TRUE))
+      prop.12.2020[i] = mean(sample(data.2020.12$PropWomen, n.2020.12, replace=TRUE))
+      diff.props.12[i] = prop.12.2020[i] - prop.12.2014[i]
+}
+
+boot.women.12 = data.frame(prop.12.2020, prop.12.2014, diff.props.12)
+head(boot.women.12,100)
+```
+
+```{r}
+ggplot(data=boot.women.12, aes(x = diff.props.12)) + geom_histogram(fill='blue', col='red', binwidth=.0005) + xlab("P_{woman2020} - P_{women2014}") + ggtitle("Bootstrap Distribution of P_{woman2020} - P_{women2014}: 12 Month")
+```
+
+```{r}
+qdata(~ diff.props.12, c(0.025, 0.975), data=boot.women.12)
+```
+## Ali Permutation test code starts here on the prop of women proportion difference
+
+```{r}
+favstats(~ totalMonthOvernightSum | Downturn, data=monthly12women.df) 
+favstats(~ totalMonthOvernightSum | Downturn, data=monthly12women.df)[1,]$mean - favstats(~ totalMonthOvernightSum | Downturn, data=monthly12women.df)[2,]$mean
+```
+
+```{r}
+favstats(~ PropWomen | Downturn, data=monthly12women.df)
+favstats(~ PropWomen | Downturn, data=monthly12women.df)[1,]$mean - favstats(~ PropWomen | Downturn, data=monthly12women.df)[2,]$mean
+```
+
+```{r}
+obMeanDiff.12 = favstats(~ PropWomen | Downturn, data=monthly12women.df)[2,]$mean - favstats(~ PropWomen | Downturn, data=monthly12women.df)[1,]$mean #computes current difference of sample means 
+obMeanDiff.12
+N = 100000 #2000 different permutations minus the difference we have observed
+womenprop.2014.12=numeric(N)
+womenprop.2020.12=numeric(N)
+outcomeW.12 = numeric(N) #create a vector to store differences of means
+for(i in 1:N)
+{ indexW.12 = sample(24, 12, replace=FALSE) 
+   womenprop.2014.12[i] = mean(monthly12women.df$PropWomen[indexW.12])
+   womenprop.2020.12[i] = mean(monthly12women.df$PropWomen[-indexW.12])
+   outcomeW.12[i] = womenprop.2020.12[i] - womenprop.2014.12[i] #difference between means
+}
+
+diffWomen.df.12=data.frame(womenprop.2020.12,womenprop.2014.12,outcomeW.12)
+diffWomen.df.12
+```
+
+```{r}
+hist(outcomeW.12, xlab="Diff of Mean Prop 2020-2014", ylab="Frequency", main="Permutation Distribution: 12 Month", col='blue', breaks=50)
+abline(v = obMeanDiff.12, col="red")
+```
+
+```{r}
+p.value.12 = prop(outcomeW.12 >= obMeanDiff.12)
+p.value.12
+```
